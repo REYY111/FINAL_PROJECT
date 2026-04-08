@@ -58,21 +58,29 @@ MAX30105::MAX30105(uint8_t addr, TwoWire& wire) : MAX3010xMultiLed(addr, wire) {
 bool MAX30105::setDefaultConfiguration() {
   MultiLedConfiguration cfg {};
   
+  // Pastikan slot 1 dan 2 aktif (Red dan IR)
+  cfg.slot[0] = SLOT_RED;
+  cfg.slot[1] = SLOT_IR;
+
   if(!setMultiLedConfiguration(cfg)) return false;
-  if(!setLedCurrent(LED_RED, 90)) return false;
-  if(!setLedCurrent(LED_IR, 80)) return false;
-  if(!setLedCurrent(LED_GREEN, 100)) return false;
-  if(!setProximityLedCurrent(100)) return false;
+
+  // --- UBAH DISINI ---
+  if(!setLedCurrent(LED_RED, 31)) return false; // Dari 90 turun ke 31 (~6mA)
+  if(!setLedCurrent(LED_IR, 31)) return false;  // Dari 80 turun ke 31 (~6mA)
+  // -------------------
+
+  if(!setLedCurrent(LED_GREEN, 0)) return false; // Matikan Green jika tidak pakai
+  if(!setProximityLedCurrent(0)) return false;
+  
   if(!setResolution(RESOLUTION_18BIT_4110US)) return false;
-  if(!setSamplingRate(SAMPLING_RATE_50SPS)) return false;
+  if(!setSamplingRate(SAMPLING_RATE_400SPS)) return false; // Set ke 400 agar responsif
   if(!setSampleAveraging(SMP_AVE_NONE)) return false;
-  if(!setADCRange(ADC_RANGE_16384NA)) return false;
+  if(!setADCRange(ADC_RANGE_4096NA)) return false; // Ubah range ke 4096 agar sensitif
   if(!enableFIFORollover()) return false;
   if(!setMode(MODE_SPO2)) return false;
   
   return true;
 }
-
 /**
  * Set LED Current
  * @param led LED

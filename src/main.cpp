@@ -3,100 +3,99 @@
 #include <PubSubClient.h>
 #include "emg.h"
 #include "ppg.h"
+#include "ecg.h"
 
-// ================= CONFIGURATION =================
-const char* ssid = "reyhannn";
-const char* password = "12345678";
-const char* mqtt_server = "10.170.222.19";
-const char* mqtt_topic = "sensor/biosignal";
+const char* ssid     = "Kamarr";
+const char* password = "Kuningan123";
+const char* mqtt_server = "192.168.0.102";
+const char* mqtt_topic  = "sensor/biosignal";
 
 WiFiClient espClient;  
 PubSubClient mqtt(espClient);
 
-// ================= WIFI TASK (CORE 0) =================
+void reconnectMQTT() {
+    while (!mqtt.connected()) {
+        Serial.println("🔄 Menghubungkan MQTT...");
+        String clientId = "ESP32_Bio_" + String(random(0xffff), HEX);
+        if (mqtt.connect(clientId.c_str())) {
+            Serial.println("✅ Terhubung!");
+        } else {
+            vTaskDelay(2000 / portTICK_PERIOD_MS);
+        }
+    }
+}
+
+// CORE 0: WIFI & MQTT
 void wifiTask(void *pv) {
     WiFi.begin(ssid, password);
-    Serial.print("Connecting to WiFi");
-    while (WiFi.status() != WL_CONNECTED) {
-        vTaskDelay(500 / portTICK_PERIOD_MS);
-        Serial.print(".");
-    }
-    Serial.println("\n✅ WiFi Connected");
-
+    while (WiFi.status() != WL_CONNECTED) vTaskDelay(500 / portTICK_PERIOD_MS);
+    
     mqtt.setServer(mqtt_server, 1883);
-    mqtt.setBufferSize(1024); // Buffer besar untuk JSON panjang
+    mqtt.setBufferSize(1500); 
 
     while (true) {
-        if (WiFi.status() == WL_CONNECTED) {
-            if (!mqtt.connected()) {
-                Serial.println("🔄 Attempting MQTT Connection...");
-                // ID unik agar tidak ditendang broker
-                String clientId = "ESP32_Client_" + String(random(0xffff), HEX);
-                if (mqtt.connect(clientId.c_str())) {
-                    Serial.println("✅ MQTT Broker Connected");
-                } else {
-                    vTaskDelay(2000 / portTICK_PERIOD_MS);
-                    continue;
-                }
-            }
-            
-            mqtt.loop();
+        if (!mqtt.connected()) reconnectMQTT();
+        mqtt.loop();
 
-            // Local buffers untuk menghindari Race Condition
-            char loc_emg[200] = {0};
-            char loc_ppg[250] = {0};
-            char loc_final[512] = {0};
+        char loc_emg[300] = {0};
+        char loc_ppg[250] = {0};
+        char loc_ecg[200] = {0};
+        char loc_final[1200] = {0};
 
-            emg_getPayload(loc_emg);
-            ppg_getPayload(loc_ppg);
+        emg_getPayload(loc_emg);
+        ppg_getPayload(loc_ppg);
+        ecg_getPayload(loc_ecg);
 
-            int len = snprintf(loc_final, sizeof(loc_final), "{%s,%s}", loc_emg, loc_ppg);
+        snprintf(loc_final, sizeof(loc_final), "{%s,%s,%s}", loc_emg, loc_ppg, loc_ecg);
 
-            if (len > 0 && len < 512) {
-                bool result = mqtt.publish(mqtt_topic, loc_final);
-                if (result) {
-                    // Hanya print titik agar serial monitor tidak lag
-                    Serial.print("."); 
-                } else {
-                    Serial.println("\n❌ MQTT Publish Fail");
-                }
-            }
+        if (mqtt.connected()) {
+            mqtt.publish(mqtt_topic, loc_final);
         }
-        // Jeda 50ms (20Hz) - Stabil untuk Windows Broker
-        vTaskDelay(100 / portTICK_PERIOD_MS); 
+
+        // Kirim setiap 10ms (Pas dengan 10 sampel EMG)
+        vTaskDelay(10 / portTICK_PERIOD_MS); 
     }
 }
 
-// ================= EMG TASK (CORE 1) =================
+// CORE 1: SENSOR SAMPLING
 void emgTask(void *pv) {
     emg_init();
-    TickType_t lastWake = xTaskGetTickCount();
+    TickType_t xLastWakeTime = xTaskGetTickCount();
     while (true) {
-        emg_sample();
-        vTaskDelayUntil(&lastWake, 1 / portTICK_PERIOD_MS);
+        emg_sample(); // 1ms
+        vTaskDelayUntil(&xLastWakeTime, 1 / portTICK_PERIOD_MS);
     }
 }
 
-// ================= PPG TASK (CORE 1) =================
+// Task ECG dan PPG lainnya tetap sama...
+void ecgTask(void *pv) {
+    ecg_init();
+    TickType_t xLastWakeTime = xTaskGetTickCount();
+    while (true) {
+        ecg_sample(); 
+        vTaskDelayUntil(&xLastWakeTime, 2 / portTICK_PERIOD_MS);
+    }
+}
+
 void ppgTask(void *pv) {
     ppg_init();
-    TickType_t lastWake = xTaskGetTickCount();
+    TickType_t xLastWakeTime = xTaskGetTickCount();
     while (true) {
         ppg_sample(); 
-        vTaskDelayUntil(&lastWake, 40 / portTICK_PERIOD_MS);
+        vTaskDelayUntil(&xLastWakeTime, 13 / portTICK_PERIOD_MS);
     }
 }
 
 void setup() {
     Serial.begin(115200);
-    delay(1000);
-
-    // Task Sensor di Core 1 (High Priority)
+    
+    // Core 1 untuk Sensor (High Priority)
     xTaskCreatePinnedToCore(emgTask, "EMG", 4096, NULL, 3, NULL, 1);
+    xTaskCreatePinnedToCore(ecgTask, "ECG", 4096, NULL, 3, NULL, 1);
     xTaskCreatePinnedToCore(ppgTask, "PPG", 4096, NULL, 2, NULL, 1);
-
-    // Task WiFi di Core 0 (Stack besar)
-    xTaskCreatePinnedToCore(wifiTask, "WIFI", 10000, NULL, 1, NULL, 0);
+    
+    // Core 0 untuk WiFi
+    xTaskCreatePinnedToCore(wifiTask, "WiFi", 10000, NULL, 1, NULL, 0);
 }
 
-void loop() {}
+void loop() { vTaskDelete(NULL); }

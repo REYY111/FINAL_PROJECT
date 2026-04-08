@@ -1,95 +1,74 @@
-#include <Arduino.h>
-#include <Wire.h>
+#include "ppg.h"
 #include <MAX30105.h>
 #include "filters.h"
-#include "ppg.h"
 
-// ================= I2C PIN =================
-#define SDA_PIN 21
-#define SCL_PIN 22
-
-// ================= SENSOR =================
+// ================= SENSOR & FILTER SETTINGS =================
 MAX30105 sensor;
-
-// ================= FILTER PARAM =================
-const float kFs = 25.0;
+const float kFs = 75.0;
 const float kLowPassCutoff = 5.0;
+const float kHighPassCutoff = 0.5;
 
-// ================= FILTER =================
+// Instances Filter
 LowPassFilter lp_red(kLowPassCutoff, kFs);
 LowPassFilter lp_ir(kLowPassCutoff, kFs);
+HighPassFilter hp_red(kHighPassCutoff, kFs); 
+HighPassFilter hp_ir(kHighPassCutoff, kFs);
 
-HighPassFilter hp_red(0.5, kFs);
-HighPassFilter hp_ir(0.5, kFs);
+// Data Global
+float red_raw_global = 0;
+float ir_raw_global = 0;
+float red_final_global = 0;
+float ir_final_global = 0;
 
-// ================= GLOBAL DATA =================
-float red_raw_g = 0;
-float ir_raw_g  = 0;
-float red_final_g = 0;
-float ir_final_g  = 0;
-
-static unsigned long t0;
-static bool sensor_ok = false;
+static unsigned long t0_ppg;
 
 // ================= INIT =================
-void ppg_init() {
-
-    Serial.println("Init I2C...");
-
-    // WAJIB untuk ESP32
-    Wire.begin(SDA_PIN, SCL_PIN);
-    Wire.setClock(400000);
-
-    delay(100);
-
-    // ⭐ versi library kamu TANPA parameter
+bool ppg_init() {
     if (!sensor.begin()) {
-        Serial.println("❌ MAX30105 not found");
-        sensor_ok = false;
-        return;
+        return false;
     }
-
+    // Set sampling rate sensor ke 400sps (internal sensor)
+    // Tapi kita akan tarik data di software pada 50Hz (kFs)
     sensor.setSamplingRate(MAX30105::SAMPLING_RATE_400SPS);
-
-    sensor_ok = true;
-    t0 = millis();
-
-    Serial.println("✅ PPG READY");
+    t0_ppg = millis();
+    return true;
 }
 
-// ================= SAMPLING =================
+// ================= PROCESS =================
 void ppg_sample() {
+    auto sample = sensor.readSample(1000);
 
-    if (!sensor_ok) return;
+    float red_raw = (float)sample.red;
+    float ir_raw  = (float)sample.ir;
 
-    // ⭐ fungsi yang DIDUKUNG library kamu
-    auto sample = sensor.readSample(10); // timeout kecil (RTOS safe)
+    // 1. Low Pass (Buang noise frekuensi tinggi)
+    float red_lpf = lp_red.process(red_raw);
+    float ir_lpf  = lp_ir.process(ir_raw);
 
-    red_raw_g = (float)sample.red;
-    ir_raw_g  = (float)sample.ir;
+    // 2. High Pass (Buang DC Offset / Baseline Drift)
+    float red_final = hp_red.process(red_lpf);
+    float ir_final  = hp_ir.process(ir_lpf);
 
-    // ===== FILTER =====
-    float red_lpf = lp_red.process(red_raw_g);
-    float ir_lpf  = lp_ir.process(ir_raw_g);
-
-    red_final_g = hp_red.process(red_lpf);
-    ir_final_g  = hp_ir.process(ir_lpf);
+    // Simpan ke global
+    red_raw_global = red_raw;
+    ir_raw_global = ir_raw;
+    red_final_global = red_final;
+    ir_final_global = ir_final;
 }
 
 // ================= PAYLOAD =================
 void ppg_getPayload(char* payload) {
-
-    snprintf(payload,250,
-      "\"ppg\":{"
-      "\"red_raw\":%.0f,"
-      "\"ir_raw\":%.0f,"
-      "\"red\":%.2f,"
-      "\"ir\":%.2f,"
-      "\"ts\":%lu}",
-      red_raw_g,
-      ir_raw_g,
-      red_final_g,
-      ir_final_g,
-      millis() - t0
+    // Format: "red_raw":...,"ir_raw":...,"red_f":...,"ir_f":...,"ppg_ts":...
+    snprintf(payload, 250,
+        "\"red_raw\":%.0f,"
+        "\"ir_raw\":%.0f,"
+        "\"red_filtered\":%.2f,"
+        "\"ir_filtered\":%.2f,"
+        "\"ppg_ts\":%lu",
+        red_raw_global,
+        ir_raw_global,
+        red_final_global,
+        ir_final_global,
+        millis() - t0_ppg
     );
 }
