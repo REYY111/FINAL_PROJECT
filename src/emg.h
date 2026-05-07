@@ -3,14 +3,14 @@
 
 #include <Arduino.h>
 
-// Deklarasi fungsi agar bisa diakses dari file lain
+#define EMG_BATCH_SIZE 20 // 20ms sampling (1ms/data) = 20 data
+
+// Deklarasi fungsi
 void emg_init();
 void emg_sample();
 void emg_getPayload(char* payload);
 
-// Eksternalisasi variabel global jika ingin diakses langsung di main.cpp
-extern volatile int rawADC_global;
-extern volatile float clean_global;
-extern volatile float envelope_global;
+// Flags untuk sinkronisasi paralel
+extern volatile bool emg_dataReady;
 
 #endif

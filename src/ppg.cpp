@@ -4,7 +4,7 @@
 
 // ================= SENSOR & FILTER SETTINGS =================
 MAX30105 sensor;
-const float kFs = 75.0;
+const float kFs = 50.0;
 const float kLowPassCutoff = 5.0;
 const float kHighPassCutoff = 0.5;
 

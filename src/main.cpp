@@ -2,12 +2,12 @@
 #include <WiFi.h>
 #include <PubSubClient.h>
 #include "emg.h"
-#include "ppg.h"
-#include "ecg.h"
+#include "ppg.h" // Pastikan ppg.h juga menggunakan pola BATCH_SIZE & snprintf
+#include "ecg.h" // Pastikan ecg.h juga menggunakan pola BATCH_SIZE & snprintf
 
-const char* ssid     = "Kamarr";
-const char* password = "Kuningan123";
-const char* mqtt_server = "192.168.0.102";
+const char* ssid     = "reyhandhata";
+const char* password = "ffffffff";
+const char* mqtt_server = "172.20.10.4";
 const char* mqtt_topic  = "sensor/biosignal";
 
 WiFiClient espClient;  
@@ -25,23 +25,26 @@ void reconnectMQTT() {
     }
 }
 
-// CORE 0: WIFI & MQTT
 void wifiTask(void *pv) {
     WiFi.begin(ssid, password);
     while (WiFi.status() != WL_CONNECTED) vTaskDelay(500 / portTICK_PERIOD_MS);
     
     mqtt.setServer(mqtt_server, 1883);
-    mqtt.setBufferSize(1500); 
+    mqtt.setBufferSize(2000); 
+
+    TickType_t xLastWakeTime = xTaskGetTickCount();
+    const TickType_t xFrequency = 20 / portTICK_PERIOD_MS; // Pengiriman Fixed 50Hz
 
     while (true) {
         if (!mqtt.connected()) reconnectMQTT();
         mqtt.loop();
 
-        char loc_emg[300] = {0};
+        char loc_emg[450] = {0};
         char loc_ppg[250] = {0};
         char loc_ecg[200] = {0};
-        char loc_final[1200] = {0};
+        char loc_final[1500] = {0};
 
+        // Ambil snapshot data terbaru dari semua sensor
         emg_getPayload(loc_emg);
         ppg_getPayload(loc_ppg);
         ecg_getPayload(loc_ecg);
@@ -52,27 +55,28 @@ void wifiTask(void *pv) {
             mqtt.publish(mqtt_topic, loc_final);
         }
 
-        // Kirim setiap 10ms (Pas dengan 10 sampel EMG)
-        vTaskDelay(10 / portTICK_PERIOD_MS); 
+        // Reset flags (opsional dalam mode circular, tapi baik untuk tracking)
+        emg_dataReady = false; 
+
+        // Jamin interval pengiriman stabil (Mencegah Garis Diagonal)
+        vTaskDelayUntil(&xLastWakeTime, xFrequency);
     }
 }
 
-// CORE 1: SENSOR SAMPLING
 void emgTask(void *pv) {
     emg_init();
     TickType_t xLastWakeTime = xTaskGetTickCount();
     while (true) {
-        emg_sample(); // 1ms
+        emg_sample(); // 1000Hz
         vTaskDelayUntil(&xLastWakeTime, 1 / portTICK_PERIOD_MS);
     }
 }
 
-// Task ECG dan PPG lainnya tetap sama...
 void ecgTask(void *pv) {
     ecg_init();
     TickType_t xLastWakeTime = xTaskGetTickCount();
     while (true) {
-        ecg_sample(); 
+        ecg_sample(); // 500Hz
         vTaskDelayUntil(&xLastWakeTime, 2 / portTICK_PERIOD_MS);
     }
 }
@@ -81,20 +85,20 @@ void ppgTask(void *pv) {
     ppg_init();
     TickType_t xLastWakeTime = xTaskGetTickCount();
     while (true) {
-        ppg_sample(); 
-        vTaskDelayUntil(&xLastWakeTime, 13 / portTICK_PERIOD_MS);
+        ppg_sample(); // 50Hz (Sekarang tepat 20ms per data)
+        vTaskDelayUntil(&xLastWakeTime, 20 / portTICK_PERIOD_MS);
     }
 }
 
 void setup() {
     Serial.begin(115200);
     
-    // Core 1 untuk Sensor (High Priority)
+    // Core 1: Khusus High Speed Sampling
     xTaskCreatePinnedToCore(emgTask, "EMG", 4096, NULL, 3, NULL, 1);
     xTaskCreatePinnedToCore(ecgTask, "ECG", 4096, NULL, 3, NULL, 1);
     xTaskCreatePinnedToCore(ppgTask, "PPG", 4096, NULL, 2, NULL, 1);
     
-    // Core 0 untuk WiFi
+    // Core 0: Khusus WiFi/Network (Agar tidak mengganggu sampling)
     xTaskCreatePinnedToCore(wifiTask, "WiFi", 10000, NULL, 1, NULL, 0);
 }
 
